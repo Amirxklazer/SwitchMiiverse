@@ -14,12 +14,15 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Install SDL2 Libraries & Download Handwriting Font
+      - name: Install SDL2 Libraries
         run: |
+          # Sync database and install SDL2 packages (should work without 403 now)
           dkp-pacman -Sy --noconfirm
           dkp-pacman -S switch-sdl2 switch-sdl2_image switch-sdl2_ttf --noconfirm
+
+      - name: Download Handwriting Font
+        run: |
           mkdir -p romfs
-          # Download Indie Flower (handwriting style) from Google Fonts
           cd romfs
           curl -L -o IndieFlower.ttf "https://github.com/google/fonts/raw/main/ofl/indieflower/IndieFlower-Regular.ttf"
           cd ..
@@ -35,11 +38,9 @@ jobs:
           #include <SDL2/SDL_image.h>
           #include <SDL2/SDL_ttf.h>
 
-          // Screen
           #define SCREEN_W 1280
           #define SCREEN_H 720
 
-          // Colors
           #define MIIVERSE_BLUE   0x0066CC
           #define GREEN           0x00B050
           #define WHITE           0xFFFFFF
@@ -49,7 +50,6 @@ jobs:
           #define POST_BG         0xFFFFFF
           #define SELECTED_BG     0xFFEE99
 
-          // Number of communities and posts visible
           #define COMMUNITY_COUNT 10
           #define POST_COUNT      4
 
@@ -73,8 +73,6 @@ jobs:
               {"ZeldaLover", "Tears of the Kingdom sky islands are breathtaking.", "Zelda Community", 37}
           };
 
-          // ------------------------------------------------------------
-          // Helper: load current user's Mii icon as an SDL_Texture
           SDL_Texture* loadMiiIcon(SDL_Renderer* renderer) {
               AccountUid uid;
               if (R_FAILED(accountGetActiveUser(&uid))) return NULL;
@@ -93,24 +91,20 @@ jobs:
               return tex;
           }
 
-          // Helper: create a simple default Mii silhouette (circle with "?")
           SDL_Texture* createDefaultMii(SDL_Renderer* renderer, int size) {
               SDL_Surface* surface = SDL_CreateRGBSurface(0, size, size, 32, 0,0,0,0);
               SDL_FillRect(surface, NULL, SDL_MapRGB(surface->format, 0xCC,0xCC,0xCC));
-              // crude "?" using text or a circle; we'll just return a grey circle
               SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surface);
               SDL_FreeSurface(surface);
               return tex;
           }
 
-          // Draw filled rectangle
           void drawRect(SDL_Renderer* r, int x, int y, int w, int h, u32 color) {
               SDL_SetRenderDrawColor(r, (color>>16)&0xFF, (color>>8)&0xFF, color&0xFF, 255);
               SDL_Rect rc = {x, y, w, h};
               SDL_RenderFillRect(r, &rc);
           }
 
-          // Draw text using TTF
           void drawText(SDL_Renderer* r, TTF_Font* font, int x, int y, const char* text, u32 color) {
               SDL_Color c = {(color>>16)&0xFF, (color>>8)&0xFF, color&0xFF, 255};
               SDL_Surface* s = TTF_RenderUTF8_Blended(font, text, c);
@@ -123,28 +117,22 @@ jobs:
               SDL_DestroyTexture(t);
           }
 
-          // Draw a post entry (user icon + username + snippet)
           void drawPostEntry(SDL_Renderer* r, TTF_Font* font, TTF_Font* smallFont,
                              SDL_Texture* defaultMii, Post* p, int x, int y, int w, bool selected) {
               u32 bg = selected ? SELECTED_BG : POST_BG;
               drawRect(r, x, y, w, 80, bg);
-              // Mii icon (use default for simplicity)
               if (defaultMii) {
                   SDL_Rect dst = {x+10, y+10, 60, 60};
                   SDL_RenderCopy(r, defaultMii, NULL, &dst);
               }
-              // Username
               drawText(r, font, x+80, y+10, p->user, DARK_GRAY);
-              // Community
               drawText(r, smallFont, x+80, y+35, p->community, MIIVERSE_BLUE);
-              // Snippet
               char snippet[100];
               strncpy(snippet, p->body, 90);
               snippet[89] = '\0';
               drawText(r, smallFont, x+80, y+55, snippet, DARK_GRAY);
           }
 
-          // ----------------------------------------------------------------------
           int main(int argc, char* argv[]) {
               SDL_Init(SDL_INIT_VIDEO);
               IMG_Init(IMG_INIT_JPG | IMG_INIT_PNG);
@@ -152,88 +140,48 @@ jobs:
               SDL_Window* window = SDL_CreateWindow("Miiverse", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_W, SCREEN_H, 0);
               SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
-              // Load handwriting font
               TTF_Font* fontHand = TTF_OpenFont("romfs:/IndieFlower.ttf", 28);
               TTF_Font* fontSmall = TTF_OpenFont("romfs:/IndieFlower.ttf", 18);
               TTF_Font* fontBig = TTF_OpenFont("romfs:/IndieFlower.ttf", 36);
-
-              if (!fontHand) {
-                  // Fallback if font missing
-                  fontHand = TTF_OpenFont("romfs:/font.ttf", 24);
-                  fontSmall = TTF_OpenFont("romfs:/font.ttf", 14);
-                  fontBig = TTF_OpenFont("romfs:/font.ttf", 32);
-              }
+              if (!fontHand) { fontHand = TTF_OpenFont("romfs:/font.ttf", 24); fontSmall = TTF_OpenFont("romfs:/font.ttf", 14); fontBig = TTF_OpenFont("romfs:/font.ttf", 32); }
 
               SDL_Texture* userMii = loadMiiIcon(renderer);
               SDL_Texture* defaultMii = createDefaultMii(renderer, 60);
 
-              // State
               bool running = true;
               bool viewingPost = false;
-              int selectedPost = 0;   // currently highlighted post in feed
-              int detailPost = -1;    // post index for detail view
+              int selectedPost = 0;
+              int detailPost = -1;
 
               while (running) {
                   SDL_Event e;
-                  while (SDL_PollEvent(&e)) {
-                      if (e.type == SDL_QUIT) running = false;
-                  }
+                  while (SDL_PollEvent(&e)) { if (e.type == SDL_QUIT) running = false; }
 
-                  // Input
                   padUpdate(&pad);
                   u64 kDown = padGetButtonsDown(&pad);
 
                   if (viewingPost) {
-                      // Detail view
-                      if (kDown & HidNpadButton_B) {
-                          viewingPost = false;
-                      }
+                      if (kDown & HidNpadButton_B) viewingPost = false;
                   } else {
-                      // Main screen navigation
                       if (kDown & HidNpadButton_Plus) running = false;
-                      if (kDown & HidNpadButton_Down) {
-                          selectedPost = (selectedPost + 1) % POST_COUNT;
-                      }
-                      if (kDown & HidNpadButton_Up) {
-                          selectedPost = (selectedPost - 1 + POST_COUNT) % POST_COUNT;
-                      }
-                      if (kDown & HidNpadButton_A) {
-                          viewingPost = true;
-                          detailPost = selectedPost;
-                      }
-                      // Yeah! shortcut on Y button
-                      if (kDown & HidNpadButton_Y) {
-                          posts[selectedPost].yeahs++;
-                      }
+                      if (kDown & HidNpadButton_Down) selectedPost = (selectedPost + 1) % POST_COUNT;
+                      if (kDown & HidNpadButton_Up) selectedPost = (selectedPost - 1 + POST_COUNT) % POST_COUNT;
+                      if (kDown & HidNpadButton_A) { viewingPost = true; detailPost = selectedPost; }
+                      if (kDown & HidNpadButton_Y) posts[selectedPost].yeahs++;
                   }
 
-                  // Drawing
                   SDL_SetRenderDrawColor(renderer, 0xF0, 0xF0, 0xF0, 255);
                   SDL_RenderClear(renderer);
 
                   if (!viewingPost) {
-                      // ---------- MAIN SCREEN ----------
-                      // Header
                       drawRect(renderer, 0, 0, SCREEN_W, 60, MIIVERSE_BLUE);
                       drawText(renderer, fontBig, 20, 10, "Miiverse", WHITE);
-
-                      // Notification bell
-                      SDL_Rect bell = {1180, 10, 40, 40};
-                      SDL_SetRenderDrawColor(renderer, 255, 215, 0, 255);
-                      SDL_RenderFillRect(renderer, &bell);
-                      drawText(renderer, fontSmall, 1190, 55, "3", WHITE); // dummy count
-
-                      // Communities button
+                      SDL_Rect bell = {1180, 10, 40, 40}; SDL_SetRenderDrawColor(renderer, 255,215,0,255); SDL_RenderFillRect(renderer, &bell);
+                      drawText(renderer, fontSmall, 1190, 55, "3", WHITE);
                       drawRect(renderer, 1100, 10, 70, 40, GREEN);
                       drawText(renderer, fontSmall, 1105, 15, "Comms", WHITE);
+                      if (userMii) { SDL_Rect miiR = {1230, 5, 50, 50}; SDL_RenderCopy(renderer, userMii, NULL, &miiR); }
 
-                      // User Mii top-right
-                      if (userMii) {
-                          SDL_Rect miiR = {1230, 5, 50, 50};
-                          SDL_RenderCopy(renderer, userMii, NULL, &miiR);
-                      }
-
-                      // Community grid (left)
                       drawRect(renderer, 10, 70, 280, 50, LIGHT_GRAY);
                       drawText(renderer, fontSmall, 20, 80, "Communities", MIIVERSE_BLUE);
                       int yPos = 130;
@@ -244,44 +192,33 @@ jobs:
                           if (yPos > 600) break;
                       }
 
-                      // Posts feed (right)
                       drawRect(renderer, 310, 70, 960, 50, LIGHT_GRAY);
                       drawText(renderer, fontSmall, 320, 80, "Latest Posts", MIIVERSE_BLUE);
                       yPos = 130;
                       for (int i = 0; i < POST_COUNT; i++) {
-                          drawPostEntry(renderer, fontHand, fontSmall, defaultMii, &posts[i],
-                                        310, yPos, 960, (i == selectedPost));
+                          drawPostEntry(renderer, fontHand, fontSmall, defaultMii, &posts[i], 310, yPos, 960, (i == selectedPost));
                           yPos += 85;
                       }
 
-                      // Footer
                       drawRect(renderer, 0, SCREEN_H-40, SCREEN_W, 40, MIIVERSE_BLUE);
                       drawText(renderer, fontSmall, 20, SCREEN_H-30, "A:View  B:Back  Y:Yeah!  +:Exit", WHITE);
                   } else {
-                      // ---------- DETAIL VIEW ----------
                       drawRect(renderer, 0, 0, SCREEN_W, 60, MIIVERSE_BLUE);
                       drawText(renderer, fontBig, 20, 10, "Miiverse - Post", WHITE);
                       drawText(renderer, fontSmall, 1150, 15, "B: Back", WHITE);
 
-                      // User info
                       drawRect(renderer, 20, 80, 1240, 120, WHITE);
-                      if (defaultMii) {
-                          SDL_Rect dMii = {40, 100, 80, 80};
-                          SDL_RenderCopy(renderer, defaultMii, NULL, &dMii);
-                      }
+                      if (defaultMii) { SDL_Rect dMii = {40, 100, 80, 80}; SDL_RenderCopy(renderer, defaultMii, NULL, &dMii); }
                       drawText(renderer, fontHand, 140, 90, posts[detailPost].user, DARK_GRAY);
                       drawText(renderer, fontSmall, 140, 120, posts[detailPost].community, MIIVERSE_BLUE);
 
-                      // Post body
                       drawRect(renderer, 20, 220, 1240, 200, WHITE);
                       drawText(renderer, fontHand, 40, 230, posts[detailPost].body, DARK_GRAY);
 
-                      // Yeah! and comments
                       char yeahStr[64];
                       snprintf(yeahStr, sizeof(yeahStr), "Yeah!s: %d   Comments: 3", posts[detailPost].yeahs);
                       drawText(renderer, fontSmall, 40, 430, yeahStr, MIIVERSE_BLUE);
 
-                      // Dummy comments
                       drawRect(renderer, 20, 460, 1240, 200, LIGHT_GRAY);
                       drawText(renderer, fontSmall, 40, 470, "Comments:", DARK_GRAY);
                       drawText(renderer, fontSmall, 60, 500, "Tom: So true!", DARK_GRAY);
@@ -292,12 +229,9 @@ jobs:
                   SDL_RenderPresent(renderer);
               }
 
-              // Cleanup
               if (userMii) SDL_DestroyTexture(userMii);
               if (defaultMii) SDL_DestroyTexture(defaultMii);
-              TTF_CloseFont(fontHand);
-              TTF_CloseFont(fontSmall);
-              TTF_CloseFont(fontBig);
+              TTF_CloseFont(fontHand); TTF_CloseFont(fontSmall); TTF_CloseFont(fontBig);
               SDL_DestroyRenderer(renderer);
               SDL_DestroyWindow(window);
               TTF_Quit();
@@ -307,7 +241,7 @@ jobs:
           }
           EOF
 
-      - name: Generate Makefile
+      - name: Generate Makefile with SDL2 paths
         run: |
           cat << 'MAKEEOF' > Makefile
           ifeq ($(strip $(DEVKITPRO)),)
@@ -325,11 +259,15 @@ jobs:
           DATA        := data
           INCLUDES    := .
 
-          export SDL2_INC     := $(shell pkg-config --cflags sdl2 SDL2_image SDL2_ttf)
-          export SDL2_LIBS    := $(shell pkg-config --libs sdl2 SDL2_image SDL2_ttf)
+          # Explicit SDL2 paths
+          SDL2_PREFIX := $(DEVKITPRO)/portlibs/switch
+          SDL2_INC    := -I$(SDL2_PREFIX)/include/SDL2
+          SDL2_LIBS   := -L$(SDL2_PREFIX)/lib -lSDL2 -lSDL2_image -lSDL2_ttf
+
+          export INCLUDE := $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) -I$(DEVKITPRO)/libnx/include -I$(DEPSDIR) $(SDL2_INC)
 
           ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
-          CFLAGS      := -g -Wall -O2 -ffunction-sections -fdata-sections $(ARCH) $(INCLUDE) $(SDL2_INC) -D__SWITCH__
+          CFLAGS      := -g -Wall -O2 -ffunction-sections -fdata-sections $(ARCH) $(INCLUDE) -D__SWITCH__
           CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions
           ASFLAGS     := -g $(ARCH)
           LDFLAGS     := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map) -Wl,-z,notext
@@ -348,8 +286,6 @@ jobs:
           SFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 
           export OFILES   := $(CFILES:.c=.o) $(CPPFILES:.cpp=.o) $(SFILES:.s=.o)
-          export INCLUDE  := $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) \
-                              -I$(DEVKITPRO)/libnx/include -I$(DEPSDIR) $(SDL2_INC)
 
           .PHONY: $(BUILD) clean all
 
