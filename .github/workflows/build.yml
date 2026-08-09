@@ -19,10 +19,8 @@ jobs:
           dkp-pacman -Sy --noconfirm
           dkp-pacman -S switch-dev --noconfirm
 
-      - name: Overwrite and Enforce Clean main.c Source Code
+      - name: Write main.c Source Code
         run: |
-          # This template explicitly declares and sets up the pad input structure
-          # to properly align with modern libnx compilation architectures
           cat << 'EOF' > main.c
           #include <stdio.h>
           #include <stdlib.h>
@@ -31,12 +29,8 @@ jobs:
 
           int main(int argc, char **argv)
           {
-              // Declare the layout structure handle for default inputs
               PadState pad;
-
               consoleInit(NULL);
-
-              // Initialize default handheld or attached controller configurations
               padConfigureInput(1, HidNpadStyleSet_NpadStandard);
               padInitializeDefault(&pad);
 
@@ -45,14 +39,9 @@ jobs:
 
               while(appletMainLoop())
               {
-                  // Scan the active hardware handles
                   padUpdate(&pad);
                   u64 kDown = padGetButtonsDown(&pad);
-
-                  if (kDown & HidNpadButton_Plus) {
-                      break; 
-                  }
-
+                  if (kDown & HidNpadButton_Plus) break;
                   consoleUpdate(NULL);
               }
 
@@ -61,9 +50,9 @@ jobs:
           }
           EOF
 
-      - name: Generate Robust Makefile
+      - name: Generate Makefile
         run: |
-          cat << 'EOF' > Makefile
+          cat << 'MAKEEOF' > Makefile
           ifeq ($(strip $(DEVKITPRO)),)
           $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>devkitpro")
           endif
@@ -76,19 +65,20 @@ jobs:
           DATA        := data
           INCLUDES    := .
 
-          LD          := $(CXX)
-
-          CFLAGS      := -g -Wall -O2 -mgeneral-regs-only $(MACHDEP) $(INCLUDE) -D__SWITCH__
+          # Essential flags for modern libnx compatibility
+          ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
+          CFLAGS      := -g -Wall -O2 -ffunction-sections -fdata-sections $(ARCH) $(INCLUDE) -D__SWITCH__
           CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions
-          ASFLAGS     := -g $(MACHDEP)
-          LDFLAGS     := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(MACHDEP) -Wl,-Map,$(notdir $*.map)
+          ASFLAGS     := -g $(ARCH)
+          LDFLAGS     := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map) -Wl,-z,notext
 
           LIBS        := -L$(DEVKITPRO)/libnx/lib -L$(DEVKITPRO)/portlibs/switch/lib -lnx
 
           ifneq ($(BUILD),$(notdir $(CURDIR)))
           export OUTPUT   := $(CURDIR)/$(TARGET)
           export TOPDIR   := $(CURDIR)
-          export VPATH    := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) $(foreach dir,$(DATA),$(CURDIR)/$(dir))
+          export VPATH    := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
+                              $(foreach dir,$(DATA),$(CURDIR)/$(dir))
           export DEPSDIR  := $(CURDIR)/$(BUILD)
 
           CFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
@@ -96,7 +86,8 @@ jobs:
           SFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 
           export OFILES   := $(CFILES:.c=.o) $(CPPFILES:.cpp=.o) $(SFILES:.s=.o)
-          export INCLUDE  := $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) -I$(DEVKITPRO)/libnx/include -I$(DEPSDIR)
+          export INCLUDE  := $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) \
+                              -I$(DEVKITPRO)/libnx/include -I$(DEPSDIR)
 
           .PHONY: $(BUILD) clean all
 
@@ -114,10 +105,10 @@ jobs:
           DEPENDS := $(OFILES:.o=.d)
           $(OUTPUT).nro: $(OUTPUT).elf
           $(OUTPUT).elf: $(OFILES)
-          	$(LD) $(LDFLAGS) $(OFILES) $(LIBS) -o $@
+          	$(CXX) $(LDFLAGS) $(OFILES) $(LIBS) -o $@
           -include $(DEPENDS)
           endif
-          EOF
+          MAKEEOF
 
       - name: Build
         run: make
