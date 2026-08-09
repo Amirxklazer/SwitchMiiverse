@@ -8,41 +8,17 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: devkitpro/devkita64:latest
     
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Update System CA Certificates
-        run: |
-          apt-get update -qq && apt-get install -y -qq ca-certificates
+      - name: Setup devkitPro with Switch tools
+        uses: devkitpro/setup-devkitpro@v1
+        with:
+          packages: switch-dev
 
-      - name: Fix pacman User-Agent (403 workaround)
-        run: |
-          # The devkitPro server now requires a plausible User-Agent.
-          # Append a HTTPUserAgent line to the pacman configuration.
-          echo 'HTTPUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"' >> /etc/pacman.conf
-
-      - name: Install Dependencies with Retry
-        run: |
-          # Stop immediately if any command fails
-          set -e
-          # Retry the package sync up to 5 times in case of transient network errors
-          for i in {1..5}; do
-            echo "Attempt $i: Syncing package databases..."
-            if dkp-pacman -Sy --noconfirm; then
-              echo "Sync successful"
-              break
-            else
-              echo "Sync failed, waiting 10 seconds..."
-              sleep 10
-            fi
-          done
-          # Install the switch development group
-          dkp-pacman -S switch-dev --noconfirm
-
-      - name: Write main.c Source Code
+      - name: Write main.c (Miiverse UI)
         run: |
           cat << 'EOF' > main.c
           // Miiverse UI Simulation for Nintendo Switch
@@ -280,10 +256,10 @@ jobs:
           endif
           MAKEEOF
 
-      - name: Build
-        run: make
+      - name: Build Homebrew
+        run: make -f Makefile
 
-      - name: Upload NRO
+      - name: Upload NRO Artifact
         uses: actions/upload-artifact@v4
         with:
           name: SwitchMiiverse-NRO
