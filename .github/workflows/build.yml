@@ -20,14 +20,13 @@ jobs:
 
       - name: Install Switch Development Tools
         run: |
-          # Initialize pacman database and install switch tools directly
           dkp-pacman -Sy --noconfirm
           dkp-pacman -S switch-dev --noconfirm
 
       - name: Compile Application Using Makefile
         run: |
-          # Execute the standard devkitPro build command
-          make
+          # Explicitly target our specific capitalized Makefile asset
+          make -f Makefile
 
       - name: Export Compiled NRO Homebrew Binary
         uses: actions/upload-artifact@v4
