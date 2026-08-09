@@ -1,0 +1,35 @@
+name: Remote Nintendo Switch Homebrew Builder
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build_switch:
+    name: Build Switch NRO File
+    runs-on: ubuntu-latest
+    container:
+      image: 'devkitpro/devkita64:latest'
+
+    steps:
+      - name: Checkout Repository Source Code
+        uses: actions/checkout@v4
+
+      - name: Update Toolchain and Install Switch-Dev Libraries
+        run: |
+          dkp-pacman -Syu --noconfirm
+          dkp-pacman -S switch-dev --noconfirm
+
+      - name: Compile Application Using Makefile
+        run: |
+          make
+
+      - name: Export Compiled NRO Homebrew Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: SwitchMiiverse-Homebrew-Build
+          path: ./*.nro
+          if-no-files-found: error
