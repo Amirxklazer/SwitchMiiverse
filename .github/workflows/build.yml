@@ -14,9 +14,19 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Update System CA Certificates
         run: |
-          dkp-pacman -Sy --noconfirm
+          # Fix potential TLS verification issues that cause 403 errors
+          apt-get update -qq && apt-get install -y -qq ca-certificates
+
+      - name: Install Dependencies with Retry
+        run: |
+          # Retry the package sync up to 5 times in case of transient network errors
+          for i in 1 2 3 4 5; do
+            echo "Attempt $i: Syncing package databases..."
+            dkp-pacman -Sy --noconfirm && break || sleep 10
+          done
+          # Install the switch development group
           dkp-pacman -S switch-dev --noconfirm
 
       - name: Write main.c Source Code
