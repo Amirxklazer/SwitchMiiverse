@@ -23,18 +23,72 @@ jobs:
           dkp-pacman -Sy --noconfirm
           dkp-pacman -S switch-dev --noconfirm
 
+      - name: Reconstruct Makefile with Tab Sanitization
+        run: |
+          # This block forcefully writes a fresh, syntax-compliant Makefile
+          # utilizing system-level literal tabs required by the GNU compiler
+          cat << 'EOF' > Makefile
+          ifeq ($(strip $(DEVKITPRO)),)
+          $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>devkitpro")
+          endif
+
+          include $(DEVKITPRO)/libnx/switch_rules
+
+          TARGET      :=  SwitchMiiverse
+          BUILD       :=  build
+          SOURCES     :=  .
+          DATA        :=  data
+          INCLUDES    :=  .
+
+          CFLAGS      :=  -g -Wall -O2 -mgeneral-regs-only $(MACHDEP) $(INCLUDE) -D__SWITCH__
+          CXXFLAGS    :=  $(CFLAGS) -fno-rtti -fno-exceptions
+          ASFLAGS     :=  -g $(MACHDEP)
+          LDFLAGS     =   -specs=$(DEVKITPRO)/libnx/switch.specs -g $(MACHDEP) -Wl,-Map,$(notdir $*.map)
+
+          LIBS        :=  -lnx
+
+          ifneq ($(BUILD),$(notdir $(CURDIR)))
+          export OUTPUT   :=  $(CURDIR)/$(TARGET)
+          export TOPDIR   :=  $(CURDIR)
+          export VPATH    :=  $(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
+                              $(foreach dir,$(DATA),$(CURDIR)/$(dir))
+          export DEPSDIR  :=  $(CURDIR)/$(BUILD)
+
+          CFILES      :=  $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+          CPPFILES    :=  $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+          SFILES      :=  $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
+
+          export OFILES   :=  $(CFILES:.c=.o) $(CPPFILES:.cpp=.o) $(SFILES:.s=.o)
+          export INCLUDE  :=  $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) \
+                              -I$(DEVKITPRO)/libnx/include -I$(DEPSDIR)
+
+          .PHONY: $(BUILD) clean all
+
+          all: $(BUILD)
+
+          $(BUILD):
+          	@[ -d $@ ] || mkdir -p $@
+          	@$(MAKE) --no-print-directory -C $@ -f $(CURDIR)/Makefile
+
+          clean:
+          	@echo clean ...
+          	@rm -fr $(BUILD) $(TARGET).elf $(TARGET).nro $(TARGET).nacp
+
+          else
+
+          DEPENDS :=  $(OFILES:.o=.d)
+
+          $(OUTPUT).nro:  $(OUTPUT).elf
+          $(OUTPUT).elf:  $(OFILES)
+
+          -include $(DEPENDS)
+
+          endif
+          EOF
+
       - name: Compile Application Using Makefile
         run: |
-          # Automatically find whatever case the makefile was saved as
-          if [ -f "Makefile" ]; then
-            make -f Makefile
-          elif [ -f "makefile" ]; then
-            make -f makefile
-          else
-            echo "Listing files to diagnose:"
-            ls -la
-            exit 1
-          fi
+          make -f Makefile
 
       - name: Export Compiled NRO Homebrew Binary
         uses: actions/upload-artifact@v4
