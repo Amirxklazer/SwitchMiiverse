@@ -21,8 +21,8 @@ jobs:
 
       - name: Overwrite and Enforce Clean main.c Source Code
         run: |
-          # This forcefully populates main.c with the real, correct C code
-          # ensuring it is never empty when the compiler builds it.
+          # This template explicitly declares and sets up the pad input structure
+          # to properly align with modern libnx compilation architectures
           cat << 'EOF' > main.c
           #include <stdio.h>
           #include <stdlib.h>
@@ -31,13 +31,21 @@ jobs:
 
           int main(int argc, char **argv)
           {
+              // Declare the layout structure handle for default inputs
+              PadState pad;
+
               consoleInit(NULL);
+
+              // Initialize default handheld or attached controller configurations
+              padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+              padInitializeDefault(&pad);
 
               printf("\x1b[16;18mSwitch Homebrew Initialized Successfully!\n");
               printf("\x1b[20;12mPress PLUS (+) on your controller to exit.\n");
 
               while(appletMainLoop())
               {
+                  // Scan the active hardware handles
                   padUpdate(&pad);
                   u64 kDown = padGetButtonsDown(&pad);
 
