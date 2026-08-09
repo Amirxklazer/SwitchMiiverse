@@ -21,63 +21,63 @@ jobs:
 
       - name: Generate Robust Makefile
         run: |
-          # We use printf to insert real tabs (\t) securely, bypassing browser copy-paste issues.
-          # We also strictly define LD := $(CXX) to fix the 'unrecognized option' error.
-          
-          printf 'ifeq ($(strip $(DEVKITPRO)),)\n' > Makefile
-          printf '$$(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>devkitpro")\n' >> Makefile
-          printf 'endif\n\n' >> Makefile
-          
-          printf 'include $(DEVKITPRO)/libnx/switch_rules\n\n' >> Makefile
-          
-          printf 'TARGET      := SwitchMiiverse\n' >> Makefile
-          printf 'BUILD       := build\n' >> Makefile
-          printf 'SOURCES     := .\n' >> Makefile
-          printf 'DATA        := data\n' >> Makefile
-          printf 'INCLUDES    := .\n\n' >> Makefile
-          
-          # FORCE LINKER TO BE C++ COMPILER
-          printf 'LD          := $(CXX)\n\n' >> Makefile
-          
-          printf 'CFLAGS      := -g -Wall -O2 -mgeneral-regs-only $(MACHDEP) $(INCLUDE) -D__SWITCH__\n' >> Makefile
-          printf 'CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions\n' >> Makefile
-          printf 'ASFLAGS     := -g $(MACHDEP)\n' >> Makefile
-          printf 'LDFLAGS     := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(MACHDEP) -Wl,-Map,$(notdir $*.map)\n\n' >> Makefile
-          
-          printf 'LIBS        := -lnx\n\n' >> Makefile
-          
-          printf 'ifneq ($(BUILD),$(notdir $(CURDIR)))\n' >> Makefile
-          printf 'export OUTPUT   := $(CURDIR)/$(TARGET)\n' >> Makefile
-          printf 'export TOPDIR   := $(CURDIR)\n' >> Makefile
-          printf 'export VPATH    := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) $(foreach dir,$(DATA),$(CURDIR)/$(dir))\n' >> Makefile
-          printf 'export DEPSDIR  := $(CURDIR)/$(BUILD)\n\n' >> Makefile
-          
-          printf 'CFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))\n' >> Makefile
-          printf 'CPPFILES    := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))\n' >> Makefile
-          printf 'SFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))\n\n' >> Makefile
-          
-          printf 'export OFILES   := $(CFILES:.c=.o) $(CPPFILES:.cpp=.o) $(SFILES:.s=.o)\n' >> Makefile
-          printf 'export INCLUDE  := $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) -I$(DEVKITPRO)/libnx/include -I$(DEPSDIR)\n\n' >> Makefile
-          
-          printf '.PHONY: $(BUILD) clean all\n\n' >> Makefile
-          
-          printf 'all: $(BUILD)\n\n' >> Makefile
-          
-          printf '$(BUILD):\n' >> Makefile
-          printf '\t@[ -d $@ ] || mkdir -p $@\n' >> Makefile
-          printf '\t@$(MAKE) --no-print-directory -C $@ -f $(CURDIR)/Makefile\n\n' >> Makefile
-          
-          printf 'clean:\n' >> Makefile
-          printf '\t@echo clean ...\n' >> Makefile
-          printf '\t@rm -fr $(BUILD) $(TARGET).elf $(TARGET).nro $(TARGET).nacp\n\n' >> Makefile
-          
-          printf 'else\n' >> Makefile
-          printf 'DEPENDS := $(OFILES:.o=.d)\n' >> Makefile
-          printf '$(OUTPUT).nro: $(OUTPUT).elf\n' >> Makefile
-          printf '$(OUTPUT).elf: $(OFILES)\n' >> Makefile
-          printf '\t$(LD) $(LDFLAGS) $(OFILES) $(LIBS) -o $@\n' >> Makefile
-          printf '-include $(DEPENDS)\n' >> Makefile
-          printf 'endif\n' >> Makefile
+          # This writes the text exactly as shown below, handling hyphens and tabs perfectly.
+          # Note: The indentation under '$(BUILD):' and 'clean:' must use real tabs.
+          cat << 'EOF' > Makefile
+          ifeq ($(strip $(DEVKITPRO)),)
+          $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>devkitpro")
+          endif
+
+          include $(DEVKITPRO)/libnx/switch_rules
+
+          TARGET      := SwitchMiiverse
+          BUILD       := build
+          SOURCES     := .
+          DATA        := data
+          INCLUDES    := .
+
+          LD          := $(CXX)
+
+          CFLAGS      := -g -Wall -O2 -mgeneral-regs-only $(MACHDEP) $(INCLUDE) -D__SWITCH__
+          CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions
+          ASFLAGS     := -g $(MACHDEP)
+          LDFLAGS     := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(MACHDEP) -Wl,-Map,$(notdir $*.map)
+
+          LIBS        := -lnx
+
+          ifneq ($(BUILD),$(notdir $(CURDIR)))
+          export OUTPUT   := $(CURDIR)/$(TARGET)
+          export TOPDIR   := $(CURDIR)
+          export VPATH    := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) $(foreach dir,$(DATA),$(CURDIR)/$(dir))
+          export DEPSDIR  := $(CURDIR)/$(BUILD)
+
+          CFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+          CPPFILES    := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+          SFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
+
+          export OFILES   := $(CFILES:.c=.o) $(CPPFILES:.cpp=.o) $(SFILES:.s=.o)
+          export INCLUDE  := $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) -I$(DEVKITPRO)/libnx/include -I$(DEPSDIR)
+
+          .PHONY: $(BUILD) clean all
+
+          all: $(BUILD)
+
+          $(BUILD):
+          	@[ -d $@ ] || mkdir -p $@
+          	@$(MAKE) --no-print-directory -C $@ -f $(CURDIR)/Makefile
+
+          clean:
+          	@echo clean ...
+          	@rm -fr $(BUILD) $(TARGET).elf $(TARGET).nro $(TARGET).nacp
+
+          else
+          DEPENDS := $(OFILES:.o=.d)
+          $(OUTPUT).nro: $(OUTPUT).elf
+          $(OUTPUT).elf: $(OFILES)
+          	$(LD) $(LDFLAGS) $(OFILES) $(LIBS) -o $@
+          -include $(DEPENDS)
+          endif
+          EOF
 
       - name: Build
         run: make
