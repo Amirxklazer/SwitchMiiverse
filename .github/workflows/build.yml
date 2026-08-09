@@ -16,9 +16,15 @@ jobs:
 
       - name: Install SDL2 Libraries
         run: |
-          # Sync database and install SDL2 packages (should work without 403 now)
           dkp-pacman -Sy --noconfirm
           dkp-pacman -S switch-sdl2 switch-sdl2_image switch-sdl2_ttf --noconfirm
+
+      - name: Verify SDL2 Installation
+        run: |
+          echo "Listing SDL2 include directory:"
+          ls -l /opt/devkitpro/portlibs/switch/include/SDL2 || echo "SDL2 headers not found!"
+          echo "Listing SDL2 lib directory:"
+          ls -l /opt/devkitpro/portlibs/switch/lib/libSDL2* || echo "SDL2 libs not found!"
 
       - name: Download Handwriting Font
         run: |
@@ -241,7 +247,7 @@ jobs:
           }
           EOF
 
-      - name: Generate Makefile with SDL2 paths
+      - name: Generate Makefile with fixed SDL2 paths
         run: |
           cat << 'MAKEEOF' > Makefile
           ifeq ($(strip $(DEVKITPRO)),)
@@ -259,9 +265,9 @@ jobs:
           DATA        := data
           INCLUDES    := .
 
-          # Explicit SDL2 paths
+          # Fixed SDL2 paths – headers are under include/, not include/SDL2
           SDL2_PREFIX := $(DEVKITPRO)/portlibs/switch
-          SDL2_INC    := -I$(SDL2_PREFIX)/include/SDL2
+          SDL2_INC    := -I$(SDL2_PREFIX)/include
           SDL2_LIBS   := -L$(SDL2_PREFIX)/lib -lSDL2 -lSDL2_image -lSDL2_ttf
 
           export INCLUDE := $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) -I$(DEVKITPRO)/libnx/include -I$(DEPSDIR) $(SDL2_INC)
@@ -272,7 +278,7 @@ jobs:
           ASFLAGS     := -g $(ARCH)
           LDFLAGS     := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map) -Wl,-z,notext
 
-          LIBS        := -L$(DEVKITPRO)/libnx/lib -L$(DEVKITPRO)/portlibs/switch/lib -lnx $(SDL2_LIBS)
+          LIBS        := -L$(DEVKITPRO)/libnx/lib -L$(SDL2_PREFIX)/lib -lnx $(SDL2_LIBS)
 
           ifneq ($(BUILD),$(notdir $(CURDIR)))
           export OUTPUT   := $(CURDIR)/$(TARGET)
