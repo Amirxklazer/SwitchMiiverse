@@ -1,4 +1,4 @@
-name: Switch Miiverse UI Builder (Full)
+name: Switch Miiverse UI Builder (Working)
 
 on:
   push:
@@ -14,17 +14,16 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Install SDL2 Libraries
+      - name: Install SDL2 & all required libraries
         run: |
           dkp-pacman -Sy --noconfirm
-          dkp-pacman -S switch-sdl2 switch-sdl2_image switch-sdl2_ttf --noconfirm
+          dkp-pacman -S switch-sdl2 switch-sdl2_image switch-sdl2_ttf \
+                        switch-freetype switch-harfbuzz switch-libjpeg-turbo \
+                        switch-libpng switch-libwebp --noconfirm
 
-      - name: Verify SDL2 Installation
+      - name: Set PKG_CONFIG_PATH
         run: |
-          echo "Listing SDL2 headers:"
-          ls -l /opt/devkitpro/portlibs/switch/include/SDL2/ || echo "Headers missing!"
-          echo "Listing SDL2 libs:"
-          ls -l /opt/devkitpro/portlibs/switch/lib/libSDL2* || echo "Libraries missing!"
+          echo "PKG_CONFIG_PATH=/opt/devkitpro/portlibs/switch/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Download Handwriting Font
         run: |
@@ -33,7 +32,7 @@ jobs:
           curl -L -o IndieFlower.ttf "https://github.com/google/fonts/raw/main/ofl/indieflower/IndieFlower-Regular.ttf"
           cd ..
 
-      - name: Write main.c (Miiverse UI – Compilable)
+      - name: Write main.c (Miiverse UI – compilable)
         run: |
           cat << 'EOF' > main.c
           #include <stdio.h>
@@ -79,7 +78,7 @@ jobs:
               {"ZeldaLover", "Tears of the Kingdom sky islands are breathtaking.", "Zelda Community", 37}
           };
 
-          // Placeholder Mii icon (grey circle) until real Mii loading is added
+          // Placeholder Mii icon (grey circle)
           SDL_Texture* createDefaultMii(SDL_Renderer* renderer, int size) {
               SDL_Surface* surface = SDL_CreateRGBSurface(0, size, size, 32, 0,0,0,0);
               SDL_FillRect(surface, NULL, SDL_MapRGB(surface->format, 0xCC,0xCC,0xCC));
@@ -142,7 +141,6 @@ jobs:
                   fontBig = TTF_OpenFont("romfs:/font.ttf", 32);
               }
 
-              // For now, use a grey placeholder for the user’s Mii
               SDL_Texture* userMii = createDefaultMii(renderer, 50);
               SDL_Texture* defaultMii = createDefaultMii(renderer, 60);
 
@@ -239,7 +237,7 @@ jobs:
           }
           EOF
 
-      - name: Generate Makefile (fixed SDL2 paths)
+      - name: Generate Makefile with complete SDL2 linking
         run: |
           cat << 'MAKEEOF' > Makefile
           ifeq ($(strip $(DEVKITPRO)),)
@@ -258,8 +256,8 @@ jobs:
           INCLUDES    := .
 
           SDL2_PREFIX := $(DEVKITPRO)/portlibs/switch
-          SDL2_INC    := -I$(SDL2_PREFIX)/include
-          SDL2_LIBS   := -L$(SDL2_PREFIX)/lib -lSDL2 -lSDL2_image -lSDL2_ttf
+          SDL2_INC    := $(shell PKG_CONFIG_PATH=$(SDL2_PREFIX)/lib/pkgconfig pkg-config --cflags sdl2 SDL2_image SDL2_ttf)
+          SDL2_LIBS   := $(shell PKG_CONFIG_PATH=$(SDL2_PREFIX)/lib/pkgconfig pkg-config --static --libs sdl2 SDL2_image SDL2_ttf)
 
           export INCLUDE := $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) -I$(DEVKITPRO)/libnx/include -I$(DEPSDIR) $(SDL2_INC)
 
