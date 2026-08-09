@@ -21,10 +21,10 @@ jobs:
 
       - name: Verify SDL2 Installation
         run: |
-          echo "Listing SDL2 include directory:"
-          ls -l /opt/devkitpro/portlibs/switch/include/SDL2 || echo "SDL2 headers not found!"
-          echo "Listing SDL2 lib directory:"
-          ls -l /opt/devkitpro/portlibs/switch/lib/libSDL2* || echo "SDL2 libs not found!"
+          echo "Listing SDL2 headers:"
+          ls -l /opt/devkitpro/portlibs/switch/include/SDL2/ || echo "Headers missing!"
+          echo "Listing SDL2 libs:"
+          ls -l /opt/devkitpro/portlibs/switch/lib/libSDL2* || echo "Libraries missing!"
 
       - name: Download Handwriting Font
         run: |
@@ -33,7 +33,7 @@ jobs:
           curl -L -o IndieFlower.ttf "https://github.com/google/fonts/raw/main/ofl/indieflower/IndieFlower-Regular.ttf"
           cd ..
 
-      - name: Write main.c (Complete Miiverse UI)
+      - name: Write main.c (Miiverse UI – Compilable)
         run: |
           cat << 'EOF' > main.c
           #include <stdio.h>
@@ -79,24 +79,7 @@ jobs:
               {"ZeldaLover", "Tears of the Kingdom sky islands are breathtaking.", "Zelda Community", 37}
           };
 
-          SDL_Texture* loadMiiIcon(SDL_Renderer* renderer) {
-              AccountUid uid;
-              if (R_FAILED(accountGetActiveUser(&uid))) return NULL;
-              u8* buf = NULL;
-              u32 size = 0;
-              if (R_FAILED(accountGetUserImage(&uid, NULL, &size, NULL)) || size == 0) return NULL;
-              buf = (u8*)malloc(size);
-              if (!buf) return NULL;
-              if (R_FAILED(accountGetUserImage(&uid, buf, &size, NULL))) { free(buf); return NULL; }
-              SDL_RWops* rw = SDL_RWFromConstMem(buf, size);
-              SDL_Surface* surface = IMG_Load_RW(rw, 1);
-              free(buf);
-              if (!surface) return NULL;
-              SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surface);
-              SDL_FreeSurface(surface);
-              return tex;
-          }
-
+          // Placeholder Mii icon (grey circle) until real Mii loading is added
           SDL_Texture* createDefaultMii(SDL_Renderer* renderer, int size) {
               SDL_Surface* surface = SDL_CreateRGBSurface(0, size, size, 32, 0,0,0,0);
               SDL_FillRect(surface, NULL, SDL_MapRGB(surface->format, 0xCC,0xCC,0xCC));
@@ -140,6 +123,10 @@ jobs:
           }
 
           int main(int argc, char* argv[]) {
+              PadState pad;
+              padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+              padInitializeDefault(&pad);
+
               SDL_Init(SDL_INIT_VIDEO);
               IMG_Init(IMG_INIT_JPG | IMG_INIT_PNG);
               TTF_Init();
@@ -149,9 +136,14 @@ jobs:
               TTF_Font* fontHand = TTF_OpenFont("romfs:/IndieFlower.ttf", 28);
               TTF_Font* fontSmall = TTF_OpenFont("romfs:/IndieFlower.ttf", 18);
               TTF_Font* fontBig = TTF_OpenFont("romfs:/IndieFlower.ttf", 36);
-              if (!fontHand) { fontHand = TTF_OpenFont("romfs:/font.ttf", 24); fontSmall = TTF_OpenFont("romfs:/font.ttf", 14); fontBig = TTF_OpenFont("romfs:/font.ttf", 32); }
+              if (!fontHand) {
+                  fontHand = TTF_OpenFont("romfs:/font.ttf", 24);
+                  fontSmall = TTF_OpenFont("romfs:/font.ttf", 14);
+                  fontBig = TTF_OpenFont("romfs:/font.ttf", 32);
+              }
 
-              SDL_Texture* userMii = loadMiiIcon(renderer);
+              // For now, use a grey placeholder for the user’s Mii
+              SDL_Texture* userMii = createDefaultMii(renderer, 50);
               SDL_Texture* defaultMii = createDefaultMii(renderer, 60);
 
               bool running = true;
@@ -247,7 +239,7 @@ jobs:
           }
           EOF
 
-      - name: Generate Makefile with fixed SDL2 paths
+      - name: Generate Makefile (fixed SDL2 paths)
         run: |
           cat << 'MAKEEOF' > Makefile
           ifeq ($(strip $(DEVKITPRO)),)
@@ -265,7 +257,6 @@ jobs:
           DATA        := data
           INCLUDES    := .
 
-          # Fixed SDL2 paths – headers are under include/, not include/SDL2
           SDL2_PREFIX := $(DEVKITPRO)/portlibs/switch
           SDL2_INC    := -I$(SDL2_PREFIX)/include
           SDL2_LIBS   := -L$(SDL2_PREFIX)/lib -lSDL2 -lSDL2_image -lSDL2_ttf
