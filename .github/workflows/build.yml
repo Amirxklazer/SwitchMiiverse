@@ -1,4 +1,4 @@
-name: Switch Homebrew Builder
+name: Switch Miiverse UI Builder (Full)
 
 on:
   push:
@@ -14,181 +14,295 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Write main.c (Miiverse UI)
+      - name: Install SDL2 Libraries & Download Handwriting Font
+        run: |
+          dkp-pacman -Sy --noconfirm
+          dkp-pacman -S switch-sdl2 switch-sdl2_image switch-sdl2_ttf --noconfirm
+          mkdir -p romfs
+          # Download Indie Flower (handwriting style) from Google Fonts
+          cd romfs
+          curl -L -o IndieFlower.ttf "https://github.com/google/fonts/raw/main/ofl/indieflower/IndieFlower-Regular.ttf"
+          cd ..
+
+      - name: Write main.c (Complete Miiverse UI)
         run: |
           cat << 'EOF' > main.c
-          // Miiverse UI Simulation for Nintendo Switch
           #include <stdio.h>
           #include <stdlib.h>
           #include <string.h>
           #include <switch.h>
+          #include <SDL2/SDL.h>
+          #include <SDL2/SDL_image.h>
+          #include <SDL2/SDL_ttf.h>
 
-          #define MAX_POSTS 10
+          // Screen
+          #define SCREEN_W 1280
+          #define SCREEN_H 720
+
+          // Colors
+          #define MIIVERSE_BLUE   0x0066CC
+          #define GREEN           0x00B050
+          #define WHITE           0xFFFFFF
+          #define LIGHT_GRAY      0xF0F0F0
+          #define DARK_GRAY       0x333333
+          #define YELLOW_BELL     0xFFD700
+          #define POST_BG         0xFFFFFF
+          #define SELECTED_BG     0xFFEE99
+
+          // Number of communities and posts visible
+          #define COMMUNITY_COUNT 10
+          #define POST_COUNT      4
+
+          const char* communityNames[COMMUNITY_COUNT] = {
+              "Metroid", "Mario Kart", "Yoshi", "Zelda",
+              "Splatoon", "Pikmin", "Smash Bros",
+              "Animal Crossing", "Xenoblade", "Kirby"
+          };
 
           typedef struct {
               char user[32];
               char body[256];
               char community[64];
+              int yeahs;
           } Post;
 
-          static Post posts[MAX_POSTS] = {
-              {"Alice", "Just finished Metroid Dread! What an incredible final boss fight. 🔥", "Metroid Community"},
-              {"Bob", "Looking for friends to play Mario Kart 8 Deluxe with. DM me!", "Mario Kart Community"},
-              {"YoshiFan", "The new Yoshi's Crafted World update is adorable 🥚", "Yoshi's Island Community"},
-              {"Zelda_Lover", "Tears of the Kingdom sky islands are breathtaking.", "Zelda Community"},
-              {"SplatKing", "Splatfest this weekend! Team Sweet vs Team Salty.", "Splatoon Community"},
-              {"PikminPals", "Pikmin 4 co-op missions are so much fun.", "Pikmin Community"},
-              {"SmashMaster", "Any tips for beating Sephiroth in Smash Ultimate?", "Super Smash Bros. Community"},
-              {"AnimalXross", "Turnip prices are 587 bells right now! DM for Dodo code.", "Animal Crossing Community"},
-              {"XenobladeX", "Finished Xenoblade 3. That ending... 😭", "Xenoblade Community"},
-              {"KirbyStar", "Kirby and the Forgotten Land is pure joy.", "Kirby Community"}
+          Post posts[POST_COUNT] = {
+              {"Alice", "Just finished Metroid Dread! What an incredible final boss fight.", "Metroid Community", 24},
+              {"Bob", "Looking for friends to play Mario Kart 8 Deluxe with. DM me!", "Mario Kart Community", 13},
+              {"YoshiFan", "Yoshi's Crafted World update makes everything so cute!", "Yoshi Community", 45},
+              {"ZeldaLover", "Tears of the Kingdom sky islands are breathtaking.", "Zelda Community", 37}
           };
 
-          static int selected = 0;
-          static int scrollOffset = 0;
-          static int viewingPost = -1;
+          // ------------------------------------------------------------
+          // Helper: load current user's Mii icon as an SDL_Texture
+          SDL_Texture* loadMiiIcon(SDL_Renderer* renderer) {
+              AccountUid uid;
+              if (R_FAILED(accountGetActiveUser(&uid))) return NULL;
+              u8* buf = NULL;
+              u32 size = 0;
+              if (R_FAILED(accountGetUserImage(&uid, NULL, &size, NULL)) || size == 0) return NULL;
+              buf = (u8*)malloc(size);
+              if (!buf) return NULL;
+              if (R_FAILED(accountGetUserImage(&uid, buf, &size, NULL))) { free(buf); return NULL; }
+              SDL_RWops* rw = SDL_RWFromConstMem(buf, size);
+              SDL_Surface* surface = IMG_Load_RW(rw, 1);
+              free(buf);
+              if (!surface) return NULL;
+              SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surface);
+              SDL_FreeSurface(surface);
+              return tex;
+          }
 
-          void draw_rect(int x, int y, int w, int h, u32 color) {
-              for(int r=0; r<h; r++) {
-                  printf("\x1b[%d;%dH", y+r, x);
-                  for(int c=0; c<w; c++) {
-                      printf("\x1b[48;2;%d;%d;%dm ", (color>>16)&0xff, (color>>8)&0xff, color&0xff);
+          // Helper: create a simple default Mii silhouette (circle with "?")
+          SDL_Texture* createDefaultMii(SDL_Renderer* renderer, int size) {
+              SDL_Surface* surface = SDL_CreateRGBSurface(0, size, size, 32, 0,0,0,0);
+              SDL_FillRect(surface, NULL, SDL_MapRGB(surface->format, 0xCC,0xCC,0xCC));
+              // crude "?" using text or a circle; we'll just return a grey circle
+              SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surface);
+              SDL_FreeSurface(surface);
+              return tex;
+          }
+
+          // Draw filled rectangle
+          void drawRect(SDL_Renderer* r, int x, int y, int w, int h, u32 color) {
+              SDL_SetRenderDrawColor(r, (color>>16)&0xFF, (color>>8)&0xFF, color&0xFF, 255);
+              SDL_Rect rc = {x, y, w, h};
+              SDL_RenderFillRect(r, &rc);
+          }
+
+          // Draw text using TTF
+          void drawText(SDL_Renderer* r, TTF_Font* font, int x, int y, const char* text, u32 color) {
+              SDL_Color c = {(color>>16)&0xFF, (color>>8)&0xFF, color&0xFF, 255};
+              SDL_Surface* s = TTF_RenderUTF8_Blended(font, text, c);
+              if (!s) return;
+              SDL_Texture* t = SDL_CreateTextureFromSurface(r, s);
+              if (!t) { SDL_FreeSurface(s); return; }
+              SDL_Rect dst = {x, y, s->w, s->h};
+              SDL_RenderCopy(r, t, NULL, &dst);
+              SDL_FreeSurface(s);
+              SDL_DestroyTexture(t);
+          }
+
+          // Draw a post entry (user icon + username + snippet)
+          void drawPostEntry(SDL_Renderer* r, TTF_Font* font, TTF_Font* smallFont,
+                             SDL_Texture* defaultMii, Post* p, int x, int y, int w, bool selected) {
+              u32 bg = selected ? SELECTED_BG : POST_BG;
+              drawRect(r, x, y, w, 80, bg);
+              // Mii icon (use default for simplicity)
+              if (defaultMii) {
+                  SDL_Rect dst = {x+10, y+10, 60, 60};
+                  SDL_RenderCopy(r, defaultMii, NULL, &dst);
+              }
+              // Username
+              drawText(r, font, x+80, y+10, p->user, DARK_GRAY);
+              // Community
+              drawText(r, smallFont, x+80, y+35, p->community, MIIVERSE_BLUE);
+              // Snippet
+              char snippet[100];
+              strncpy(snippet, p->body, 90);
+              snippet[89] = '\0';
+              drawText(r, smallFont, x+80, y+55, snippet, DARK_GRAY);
+          }
+
+          // ----------------------------------------------------------------------
+          int main(int argc, char* argv[]) {
+              SDL_Init(SDL_INIT_VIDEO);
+              IMG_Init(IMG_INIT_JPG | IMG_INIT_PNG);
+              TTF_Init();
+              SDL_Window* window = SDL_CreateWindow("Miiverse", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_W, SCREEN_H, 0);
+              SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+
+              // Load handwriting font
+              TTF_Font* fontHand = TTF_OpenFont("romfs:/IndieFlower.ttf", 28);
+              TTF_Font* fontSmall = TTF_OpenFont("romfs:/IndieFlower.ttf", 18);
+              TTF_Font* fontBig = TTF_OpenFont("romfs:/IndieFlower.ttf", 36);
+
+              if (!fontHand) {
+                  // Fallback if font missing
+                  fontHand = TTF_OpenFont("romfs:/font.ttf", 24);
+                  fontSmall = TTF_OpenFont("romfs:/font.ttf", 14);
+                  fontBig = TTF_OpenFont("romfs:/font.ttf", 32);
+              }
+
+              SDL_Texture* userMii = loadMiiIcon(renderer);
+              SDL_Texture* defaultMii = createDefaultMii(renderer, 60);
+
+              // State
+              bool running = true;
+              bool viewingPost = false;
+              int selectedPost = 0;   // currently highlighted post in feed
+              int detailPost = -1;    // post index for detail view
+
+              while (running) {
+                  SDL_Event e;
+                  while (SDL_PollEvent(&e)) {
+                      if (e.type == SDL_QUIT) running = false;
                   }
-              }
-          }
 
-          void print_colored(int x, int y, const char* str, u32 fg, u32 bg) {
-              printf("\x1b[%d;%dH\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm%s\x1b[0m",
-                     y, x,
-                     (fg>>16)&0xff, (fg>>8)&0xff, fg&0xff,
-                     (bg>>16)&0xff, (bg>>8)&0xff, bg&0xff,
-                     str);
-          }
-
-          void draw_feed() {
-              consoleClear();
-              draw_rect(1, 1, 78, 2, 0x0066CC);
-              print_colored(2, 1, "❏ Miiverse (Unofficial)", 0xFFFFFF, 0x0066CC);
-              print_colored(60, 1, "[Y] Login", 0x00FF00, 0x0066CC);
-
-              draw_rect(1, 4, 20, 40, 0xCCCCCC);
-              print_colored(2, 4, "Communities", 0x000000, 0xCCCCCC);
-              const char* comms[] = {
-                  "Metroid", "Mario Kart", "Yoshi", "Zelda",
-                  "Splatoon", "Pikmin", "Smash", "Animal Crossing",
-                  "Xenoblade", "Kirby"
-              };
-              for(int i=0; i<10; i++) {
-                  print_colored(2, 6 + i*2, comms[i], 0x000000, 0xCCCCCC);
-              }
-
-              draw_rect(22, 4, 56, 35, 0xFFFFFF);
-              print_colored(23, 4, "Latest Posts", 0x0066CC, 0xFFFFFF);
-              
-              int start = scrollOffset;
-              for(int i=0; i<5; i++) {
-                  int idx = start + i;
-                  if(idx >= MAX_POSTS) break;
-                  int line = 6 + i*7;
-                  u32 bg = (idx == selected) ? 0xFFEE99 : 0xFFFFFF;
-                  char header[64];
-                  snprintf(header, sizeof(header), "%s  [%s]", posts[idx].user, posts[idx].community);
-                  print_colored(23, line, header, 0x000000, bg);
-                  char snippet[51];
-                  strncpy(snippet, posts[idx].body, 50);
-                  snippet[50] = '\0';
-                  print_colored(23, line+1, snippet, 0x333333, bg);
-                  if(idx != selected) {
-                      draw_rect(23, line+2, 54, 1, 0xDDDDDD);
-                  }
-              }
-
-              draw_rect(1, 43, 78, 2, 0x0066CC);
-              print_colored(2, 43, "A:View  B:Exit  D-Pad:Navigate", 0xFFFFFF, 0x0066CC);
-              consoleUpdate(NULL);
-          }
-
-          void draw_post_detail(int idx) {
-              consoleClear();
-              draw_rect(1, 1, 78, 2, 0x0066CC);
-              print_colored(2, 1, "❏ Miiverse - Post Detail", 0xFFFFFF, 0x0066CC);
-              print_colored(60, 1, "[B] Back", 0x00FF00, 0x0066CC);
-              
-              draw_rect(2, 4, 76, 5, 0xF0F0F0);
-              char userline[64];
-              snprintf(userline, sizeof(userline), "Posted by %s in %s", posts[idx].user, posts[idx].community);
-              print_colored(4, 4, userline, 0x000000, 0xF0F0F0);
-              
-              print_colored(4, 6, posts[idx].body, 0x000000, 0xF0F0F0);
-              print_colored(4, 12, "Yeah!s: 24   Comments: 3", 0x0066CC, 0xF0F0F0);
-              
-              draw_rect(2, 14, 76, 20, 0xFFFFFF);
-              print_colored(4, 14, "Comments:", 0x000000, 0xFFFFFF);
-              print_colored(4, 15, "Tom: So true!", 0x333333, 0xFFFFFF);
-              print_colored(4, 16, "Jerry: I had the same experience.", 0x333333, 0xFFFFFF);
-              print_colored(4, 17, "User2: Check my screenshot!", 0x333333, 0xFFFFFF);
-              
-              draw_rect(1, 43, 78, 2, 0x0066CC);
-              print_colored(2, 43, "B:Back", 0xFFFFFF, 0x0066CC);
-              consoleUpdate(NULL);
-          }
-
-          int main(int argc, char **argv) {
-              PadState pad;
-              consoleInit(NULL);
-              padConfigureInput(1, HidNpadStyleSet_NpadStandard);
-              padInitializeDefault(&pad);
-              
-              printf("\x1b[48;2;0;0;0m");
-              
-              consoleClear();
-              draw_rect(1, 1, 78, 2, 0x0066CC);
-              print_colored(2, 1, "Welcome to Miiverse (Unofficial)", 0xFFFFFF, 0x0066CC);
-              print_colored(2, 10, "Press A to sign in with NNID: amiir", 0x00FF00, 0x000000);
-              print_colored(2, 12, "(This is a simulation - no network connection)", 0x888888, 0x000000);
-              consoleUpdate(NULL);
-              
-              bool loggedIn = false;
-              while(appletMainLoop() && !loggedIn) {
+                  // Input
                   padUpdate(&pad);
                   u64 kDown = padGetButtonsDown(&pad);
-                  if(kDown & HidNpadButton_A) loggedIn = true;
-              }
-              
-              while(appletMainLoop()) {
-                  padUpdate(&pad);
-                  u64 kDown = padGetButtonsDown(&pad);
-                  
-                  if(viewingPost == -1) {
-                      if(kDown & HidNpadButton_Plus) break;
-                      
-                      if(kDown & HidNpadButton_Down) {
-                          selected++;
-                          if(selected >= MAX_POSTS) selected = 0;
-                          if(selected - scrollOffset >= 5) scrollOffset = selected - 4;
-                          if(selected < scrollOffset) scrollOffset = selected;
+
+                  if (viewingPost) {
+                      // Detail view
+                      if (kDown & HidNpadButton_B) {
+                          viewingPost = false;
                       }
-                      if(kDown & HidNpadButton_Up) {
-                          selected--;
-                          if(selected < 0) selected = MAX_POSTS-1;
-                          if(selected < scrollOffset) scrollOffset = selected;
-                          if(selected - scrollOffset >= 5) scrollOffset = selected - 4;
-                      }
-                      
-                      if(kDown & HidNpadButton_A) {
-                          viewingPost = selected;
-                      }
-                      
-                      draw_feed();
                   } else {
-                      if(kDown & HidNpadButton_B) {
-                          viewingPost = -1;
+                      // Main screen navigation
+                      if (kDown & HidNpadButton_Plus) running = false;
+                      if (kDown & HidNpadButton_Down) {
+                          selectedPost = (selectedPost + 1) % POST_COUNT;
                       }
-                      draw_post_detail(viewingPost);
+                      if (kDown & HidNpadButton_Up) {
+                          selectedPost = (selectedPost - 1 + POST_COUNT) % POST_COUNT;
+                      }
+                      if (kDown & HidNpadButton_A) {
+                          viewingPost = true;
+                          detailPost = selectedPost;
+                      }
+                      // Yeah! shortcut on Y button
+                      if (kDown & HidNpadButton_Y) {
+                          posts[selectedPost].yeahs++;
+                      }
                   }
+
+                  // Drawing
+                  SDL_SetRenderDrawColor(renderer, 0xF0, 0xF0, 0xF0, 255);
+                  SDL_RenderClear(renderer);
+
+                  if (!viewingPost) {
+                      // ---------- MAIN SCREEN ----------
+                      // Header
+                      drawRect(renderer, 0, 0, SCREEN_W, 60, MIIVERSE_BLUE);
+                      drawText(renderer, fontBig, 20, 10, "Miiverse", WHITE);
+
+                      // Notification bell
+                      SDL_Rect bell = {1180, 10, 40, 40};
+                      SDL_SetRenderDrawColor(renderer, 255, 215, 0, 255);
+                      SDL_RenderFillRect(renderer, &bell);
+                      drawText(renderer, fontSmall, 1190, 55, "3", WHITE); // dummy count
+
+                      // Communities button
+                      drawRect(renderer, 1100, 10, 70, 40, GREEN);
+                      drawText(renderer, fontSmall, 1105, 15, "Comms", WHITE);
+
+                      // User Mii top-right
+                      if (userMii) {
+                          SDL_Rect miiR = {1230, 5, 50, 50};
+                          SDL_RenderCopy(renderer, userMii, NULL, &miiR);
+                      }
+
+                      // Community grid (left)
+                      drawRect(renderer, 10, 70, 280, 50, LIGHT_GRAY);
+                      drawText(renderer, fontSmall, 20, 80, "Communities", MIIVERSE_BLUE);
+                      int yPos = 130;
+                      for (int i = 0; i < COMMUNITY_COUNT; i++) {
+                          drawRect(renderer, 10, yPos, 280, 50, WHITE);
+                          drawText(renderer, fontSmall, 20, yPos+10, communityNames[i], DARK_GRAY);
+                          yPos += 55;
+                          if (yPos > 600) break;
+                      }
+
+                      // Posts feed (right)
+                      drawRect(renderer, 310, 70, 960, 50, LIGHT_GRAY);
+                      drawText(renderer, fontSmall, 320, 80, "Latest Posts", MIIVERSE_BLUE);
+                      yPos = 130;
+                      for (int i = 0; i < POST_COUNT; i++) {
+                          drawPostEntry(renderer, fontHand, fontSmall, defaultMii, &posts[i],
+                                        310, yPos, 960, (i == selectedPost));
+                          yPos += 85;
+                      }
+
+                      // Footer
+                      drawRect(renderer, 0, SCREEN_H-40, SCREEN_W, 40, MIIVERSE_BLUE);
+                      drawText(renderer, fontSmall, 20, SCREEN_H-30, "A:View  B:Back  Y:Yeah!  +:Exit", WHITE);
+                  } else {
+                      // ---------- DETAIL VIEW ----------
+                      drawRect(renderer, 0, 0, SCREEN_W, 60, MIIVERSE_BLUE);
+                      drawText(renderer, fontBig, 20, 10, "Miiverse - Post", WHITE);
+                      drawText(renderer, fontSmall, 1150, 15, "B: Back", WHITE);
+
+                      // User info
+                      drawRect(renderer, 20, 80, 1240, 120, WHITE);
+                      if (defaultMii) {
+                          SDL_Rect dMii = {40, 100, 80, 80};
+                          SDL_RenderCopy(renderer, defaultMii, NULL, &dMii);
+                      }
+                      drawText(renderer, fontHand, 140, 90, posts[detailPost].user, DARK_GRAY);
+                      drawText(renderer, fontSmall, 140, 120, posts[detailPost].community, MIIVERSE_BLUE);
+
+                      // Post body
+                      drawRect(renderer, 20, 220, 1240, 200, WHITE);
+                      drawText(renderer, fontHand, 40, 230, posts[detailPost].body, DARK_GRAY);
+
+                      // Yeah! and comments
+                      char yeahStr[64];
+                      snprintf(yeahStr, sizeof(yeahStr), "Yeah!s: %d   Comments: 3", posts[detailPost].yeahs);
+                      drawText(renderer, fontSmall, 40, 430, yeahStr, MIIVERSE_BLUE);
+
+                      // Dummy comments
+                      drawRect(renderer, 20, 460, 1240, 200, LIGHT_GRAY);
+                      drawText(renderer, fontSmall, 40, 470, "Comments:", DARK_GRAY);
+                      drawText(renderer, fontSmall, 60, 500, "Tom: So true!", DARK_GRAY);
+                      drawText(renderer, fontSmall, 60, 520, "Jerry: I had the same experience.", DARK_GRAY);
+                      drawText(renderer, fontSmall, 60, 540, "User2: Check my screenshot!", DARK_GRAY);
+                  }
+
+                  SDL_RenderPresent(renderer);
               }
-              
-              consoleExit(NULL);
+
+              // Cleanup
+              if (userMii) SDL_DestroyTexture(userMii);
+              if (defaultMii) SDL_DestroyTexture(defaultMii);
+              TTF_CloseFont(fontHand);
+              TTF_CloseFont(fontSmall);
+              TTF_CloseFont(fontBig);
+              SDL_DestroyRenderer(renderer);
+              SDL_DestroyWindow(window);
+              TTF_Quit();
+              IMG_Quit();
+              SDL_Quit();
               return 0;
           }
           EOF
@@ -197,10 +311,13 @@ jobs:
         run: |
           cat << 'MAKEEOF' > Makefile
           ifeq ($(strip $(DEVKITPRO)),)
-          $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>devkitpro")
+          $(error "Please set DEVKITPRO in your environment.")
           endif
-
           include $(DEVKITPRO)/libnx/switch_rules
+
+          APP_TITLE   := Miiverse
+          APP_AUTHOR  := amirxklazer
+          APP_VERSION := 1.0
 
           TARGET      := SwitchMiiverse
           BUILD       := build
@@ -208,13 +325,16 @@ jobs:
           DATA        := data
           INCLUDES    := .
 
+          export SDL2_INC     := $(shell pkg-config --cflags sdl2 SDL2_image SDL2_ttf)
+          export SDL2_LIBS    := $(shell pkg-config --libs sdl2 SDL2_image SDL2_ttf)
+
           ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
-          CFLAGS      := -g -Wall -O2 -ffunction-sections -fdata-sections $(ARCH) $(INCLUDE) -D__SWITCH__
+          CFLAGS      := -g -Wall -O2 -ffunction-sections -fdata-sections $(ARCH) $(INCLUDE) $(SDL2_INC) -D__SWITCH__
           CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions
           ASFLAGS     := -g $(ARCH)
           LDFLAGS     := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map) -Wl,-z,notext
 
-          LIBS        := -L$(DEVKITPRO)/libnx/lib -L$(DEVKITPRO)/portlibs/switch/lib -lnx
+          LIBS        := -L$(DEVKITPRO)/libnx/lib -L$(DEVKITPRO)/portlibs/switch/lib -lnx $(SDL2_LIBS)
 
           ifneq ($(BUILD),$(notdir $(CURDIR)))
           export OUTPUT   := $(CURDIR)/$(TARGET)
@@ -229,7 +349,7 @@ jobs:
 
           export OFILES   := $(CFILES:.c=.o) $(CPPFILES:.cpp=.o) $(SFILES:.s=.o)
           export INCLUDE  := $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) \
-                              -I$(DEVKITPRO)/libnx/include -I$(DEPSDIR)
+                              -I$(DEVKITPRO)/libnx/include -I$(DEPSDIR) $(SDL2_INC)
 
           .PHONY: $(BUILD) clean all
 
