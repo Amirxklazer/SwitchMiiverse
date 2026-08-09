@@ -18,13 +18,15 @@ jobs:
       - name: Checkout Repository Source Code
         uses: actions/checkout@v4
 
-      - name: Update Toolchain and Install Switch-Dev Libraries
+      - name: Install Switch Development Tools
         run: |
-          dkp-pacman -Syu --noconfirm
+          # Initialize pacman database and install switch tools directly
+          dkp-pacman -Sy --noconfirm
           dkp-pacman -S switch-dev --noconfirm
 
       - name: Compile Application Using Makefile
         run: |
+          # Execute the standard devkitPro build command
           make
 
       - name: Export Compiled NRO Homebrew Binary
