@@ -25,8 +25,16 @@ jobs:
 
       - name: Compile Application Using Makefile
         run: |
-          # Explicitly target our specific capitalized Makefile asset
-          make -f Makefile
+          # Automatically find whatever case the makefile was saved as
+          if [ -f "Makefile" ]; then
+            make -f Makefile
+          elif [ -f "makefile" ]; then
+            make -f makefile
+          else
+            echo "Listing files to diagnose:"
+            ls -la
+            exit 1
+          fi
 
       - name: Export Compiled NRO Homebrew Binary
         uses: actions/upload-artifact@v4
