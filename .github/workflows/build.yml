@@ -16,15 +16,28 @@ jobs:
 
       - name: Update System CA Certificates
         run: |
-          # Fix potential TLS verification issues that cause 403 errors
           apt-get update -qq && apt-get install -y -qq ca-certificates
+
+      - name: Fix pacman User-Agent (403 workaround)
+        run: |
+          # The devkitPro server now requires a plausible User-Agent.
+          # Append a HTTPUserAgent line to the pacman configuration.
+          echo 'HTTPUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"' >> /etc/pacman.conf
 
       - name: Install Dependencies with Retry
         run: |
+          # Stop immediately if any command fails
+          set -e
           # Retry the package sync up to 5 times in case of transient network errors
-          for i in 1 2 3 4 5; do
+          for i in {1..5}; do
             echo "Attempt $i: Syncing package databases..."
-            dkp-pacman -Sy --noconfirm && break || sleep 10
+            if dkp-pacman -Sy --noconfirm; then
+              echo "Sync successful"
+              break
+            else
+              echo "Sync failed, waiting 10 seconds..."
+              sleep 10
+            fi
           done
           # Install the switch development group
           dkp-pacman -S switch-dev --noconfirm
@@ -32,29 +45,177 @@ jobs:
       - name: Write main.c Source Code
         run: |
           cat << 'EOF' > main.c
+          // Miiverse UI Simulation for Nintendo Switch
           #include <stdio.h>
           #include <stdlib.h>
           #include <string.h>
           #include <switch.h>
 
-          int main(int argc, char **argv)
-          {
+          #define MAX_POSTS 10
+
+          typedef struct {
+              char user[32];
+              char body[256];
+              char community[64];
+          } Post;
+
+          static Post posts[MAX_POSTS] = {
+              {"Alice", "Just finished Metroid Dread! What an incredible final boss fight. 🔥", "Metroid Community"},
+              {"Bob", "Looking for friends to play Mario Kart 8 Deluxe with. DM me!", "Mario Kart Community"},
+              {"YoshiFan", "The new Yoshi's Crafted World update is adorable 🥚", "Yoshi's Island Community"},
+              {"Zelda_Lover", "Tears of the Kingdom sky islands are breathtaking.", "Zelda Community"},
+              {"SplatKing", "Splatfest this weekend! Team Sweet vs Team Salty.", "Splatoon Community"},
+              {"PikminPals", "Pikmin 4 co-op missions are so much fun.", "Pikmin Community"},
+              {"SmashMaster", "Any tips for beating Sephiroth in Smash Ultimate?", "Super Smash Bros. Community"},
+              {"AnimalXross", "Turnip prices are 587 bells right now! DM for Dodo code.", "Animal Crossing Community"},
+              {"XenobladeX", "Finished Xenoblade 3. That ending... 😭", "Xenoblade Community"},
+              {"KirbyStar", "Kirby and the Forgotten Land is pure joy.", "Kirby Community"}
+          };
+
+          static int selected = 0;
+          static int scrollOffset = 0;
+          static int viewingPost = -1;
+
+          void draw_rect(int x, int y, int w, int h, u32 color) {
+              for(int r=0; r<h; r++) {
+                  printf("\x1b[%d;%dH", y+r, x);
+                  for(int c=0; c<w; c++) {
+                      printf("\x1b[48;2;%d;%d;%dm ", (color>>16)&0xff, (color>>8)&0xff, color&0xff);
+                  }
+              }
+          }
+
+          void print_colored(int x, int y, const char* str, u32 fg, u32 bg) {
+              printf("\x1b[%d;%dH\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm%s\x1b[0m",
+                     y, x,
+                     (fg>>16)&0xff, (fg>>8)&0xff, fg&0xff,
+                     (bg>>16)&0xff, (bg>>8)&0xff, bg&0xff,
+                     str);
+          }
+
+          void draw_feed() {
+              consoleClear();
+              draw_rect(1, 1, 78, 2, 0x0066CC);
+              print_colored(2, 1, "❏ Miiverse (Unofficial)", 0xFFFFFF, 0x0066CC);
+              print_colored(60, 1, "[Y] Login", 0x00FF00, 0x0066CC);
+
+              draw_rect(1, 4, 20, 40, 0xCCCCCC);
+              print_colored(2, 4, "Communities", 0x000000, 0xCCCCCC);
+              const char* comms[] = {
+                  "Metroid", "Mario Kart", "Yoshi", "Zelda",
+                  "Splatoon", "Pikmin", "Smash", "Animal Crossing",
+                  "Xenoblade", "Kirby"
+              };
+              for(int i=0; i<10; i++) {
+                  print_colored(2, 6 + i*2, comms[i], 0x000000, 0xCCCCCC);
+              }
+
+              draw_rect(22, 4, 56, 35, 0xFFFFFF);
+              print_colored(23, 4, "Latest Posts", 0x0066CC, 0xFFFFFF);
+              
+              int start = scrollOffset;
+              for(int i=0; i<5; i++) {
+                  int idx = start + i;
+                  if(idx >= MAX_POSTS) break;
+                  int line = 6 + i*7;
+                  u32 bg = (idx == selected) ? 0xFFEE99 : 0xFFFFFF;
+                  char header[64];
+                  snprintf(header, sizeof(header), "%s  [%s]", posts[idx].user, posts[idx].community);
+                  print_colored(23, line, header, 0x000000, bg);
+                  char snippet[51];
+                  strncpy(snippet, posts[idx].body, 50);
+                  snippet[50] = '\0';
+                  print_colored(23, line+1, snippet, 0x333333, bg);
+                  if(idx != selected) {
+                      draw_rect(23, line+2, 54, 1, 0xDDDDDD);
+                  }
+              }
+
+              draw_rect(1, 43, 78, 2, 0x0066CC);
+              print_colored(2, 43, "A:View  B:Exit  D-Pad:Navigate", 0xFFFFFF, 0x0066CC);
+              consoleUpdate(NULL);
+          }
+
+          void draw_post_detail(int idx) {
+              consoleClear();
+              draw_rect(1, 1, 78, 2, 0x0066CC);
+              print_colored(2, 1, "❏ Miiverse - Post Detail", 0xFFFFFF, 0x0066CC);
+              print_colored(60, 1, "[B] Back", 0x00FF00, 0x0066CC);
+              
+              draw_rect(2, 4, 76, 5, 0xF0F0F0);
+              char userline[64];
+              snprintf(userline, sizeof(userline), "Posted by %s in %s", posts[idx].user, posts[idx].community);
+              print_colored(4, 4, userline, 0x000000, 0xF0F0F0);
+              
+              print_colored(4, 6, posts[idx].body, 0x000000, 0xF0F0F0);
+              print_colored(4, 12, "Yeah!s: 24   Comments: 3", 0x0066CC, 0xF0F0F0);
+              
+              draw_rect(2, 14, 76, 20, 0xFFFFFF);
+              print_colored(4, 14, "Comments:", 0x000000, 0xFFFFFF);
+              print_colored(4, 15, "Tom: So true!", 0x333333, 0xFFFFFF);
+              print_colored(4, 16, "Jerry: I had the same experience.", 0x333333, 0xFFFFFF);
+              print_colored(4, 17, "User2: Check my screenshot!", 0x333333, 0xFFFFFF);
+              
+              draw_rect(1, 43, 78, 2, 0x0066CC);
+              print_colored(2, 43, "B:Back", 0xFFFFFF, 0x0066CC);
+              consoleUpdate(NULL);
+          }
+
+          int main(int argc, char **argv) {
               PadState pad;
               consoleInit(NULL);
               padConfigureInput(1, HidNpadStyleSet_NpadStandard);
               padInitializeDefault(&pad);
-
-              printf("\x1b[16;18mSwitch Homebrew Initialized Successfully!\n");
-              printf("\x1b[20;12mPress PLUS (+) on your controller to exit.\n");
-
-              while(appletMainLoop())
-              {
+              
+              printf("\x1b[48;2;0;0;0m");
+              
+              consoleClear();
+              draw_rect(1, 1, 78, 2, 0x0066CC);
+              print_colored(2, 1, "Welcome to Miiverse (Unofficial)", 0xFFFFFF, 0x0066CC);
+              print_colored(2, 10, "Press A to sign in with NNID: amiir", 0x00FF00, 0x000000);
+              print_colored(2, 12, "(This is a simulation - no network connection)", 0x888888, 0x000000);
+              consoleUpdate(NULL);
+              
+              bool loggedIn = false;
+              while(appletMainLoop() && !loggedIn) {
                   padUpdate(&pad);
                   u64 kDown = padGetButtonsDown(&pad);
-                  if (kDown & HidNpadButton_Plus) break;
-                  consoleUpdate(NULL);
+                  if(kDown & HidNpadButton_A) loggedIn = true;
               }
-
+              
+              while(appletMainLoop()) {
+                  padUpdate(&pad);
+                  u64 kDown = padGetButtonsDown(&pad);
+                  
+                  if(viewingPost == -1) {
+                      if(kDown & HidNpadButton_Plus) break;
+                      
+                      if(kDown & HidNpadButton_Down) {
+                          selected++;
+                          if(selected >= MAX_POSTS) selected = 0;
+                          if(selected - scrollOffset >= 5) scrollOffset = selected - 4;
+                          if(selected < scrollOffset) scrollOffset = selected;
+                      }
+                      if(kDown & HidNpadButton_Up) {
+                          selected--;
+                          if(selected < 0) selected = MAX_POSTS-1;
+                          if(selected < scrollOffset) scrollOffset = selected;
+                          if(selected - scrollOffset >= 5) scrollOffset = selected - 4;
+                      }
+                      
+                      if(kDown & HidNpadButton_A) {
+                          viewingPost = selected;
+                      }
+                      
+                      draw_feed();
+                  } else {
+                      if(kDown & HidNpadButton_B) {
+                          viewingPost = -1;
+                      }
+                      draw_post_detail(viewingPost);
+                  }
+              }
+              
               consoleExit(NULL);
               return 0;
           }
@@ -75,7 +236,6 @@ jobs:
           DATA        := data
           INCLUDES    := .
 
-          # Essential flags for modern libnx compatibility
           ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
           CFLAGS      := -g -Wall -O2 -ffunction-sections -fdata-sections $(ARCH) $(INCLUDE) -D__SWITCH__
           CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions
