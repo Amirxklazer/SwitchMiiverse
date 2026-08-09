@@ -8,15 +8,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+    container: devkitpro/devkita64:latest
+
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
-
-      - name: Setup devkitPro with Switch tools
-        uses: devkitpro/setup-devkitpro@v1
-        with:
-          packages: switch-dev
 
       - name: Write main.c (Miiverse UI)
         run: |
